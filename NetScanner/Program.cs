@@ -1,11 +1,4 @@
-﻿// Only the updated code is shown below. 
-// Changes:
-// 1. Added a "Threads (default 16)" label and TextField to let users specify thread count.
-// 2. In StartScan(), we parse the thread count and use a SemaphoreSlim for concurrent scans.
-// 3. The scanning loop is replaced with a parallel tasks approach, updating the progress bar 
-//    as each task finishes.
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -31,11 +24,14 @@ class Program
     static TextField startHostField;
     static TextField endHostField;
     static TextField portsField;
-    static TextField threadsField;        // <--- New field for thread count
+    static TextField threadsField;
     static TextView resultsView;
     static Button scanButton;
     static Button exportButton;
     static ProgressBar progressBar;
+
+    // A lock to prevent interleaving of results in the UI
+    private static readonly object resultsLock = new object();
 
     static List<ScanResult> scanResults = new List<ScanResult>();
 
@@ -84,7 +80,6 @@ class Program
             Width = 20
         };
 
-        // New label & field for thread count
         var threadsLabel = new Label("Threads (default 16): ") { X = 1, Y = 9 };
         threadsField = new TextField("16")
         {
@@ -127,7 +122,6 @@ class Program
             Multiline = true,
         };
 
-        // Add controls to the window
         win.Add(
             subnetLabel, subnetField,
             startLabel, startHostField,
@@ -237,7 +231,6 @@ class Program
                     }
                     finally
                     {
-                        // Update progress & release the semaphore
                         int newCount = Interlocked.Increment(ref count);
                         float fraction = (float)newCount / total;
                         Application.MainLoop.Invoke(() =>
@@ -414,25 +407,30 @@ class Program
 
     private static void AppendResult(string text, ConsoleColor color)
     {
-        Application.MainLoop.Invoke(() =>
+        lock (resultsLock)
         {
-            resultsView.ColorScheme = GetColorSchemeFor(color);
-            resultsView.ReadOnly = false;
-            resultsView.Text += text + "\n";
-            resultsView.ReadOnly = true;
-
-            if (resultsView.CanFocus)
+            Application.MainLoop.Invoke(() =>
             {
-                resultsView.CursorPosition = new Point(0, resultsView.Lines - 1);
-            }
-            resultsView.SetNeedsDisplay();
-        });
+                resultsView.ColorScheme = GetColorSchemeFor(color);
+                resultsView.ReadOnly = false;
+                resultsView.Text += text + "\n";
+                resultsView.ReadOnly = true;
+
+                if (resultsView.CanFocus)
+                {
+                    resultsView.CursorPosition = new Point(0, resultsView.Lines - 1);
+                }
+                resultsView.SetNeedsDisplay();
+            });
+        }
     }
 
     private static void AppendDeviceInfo(
         string ip, string fqdn, string mac,
         int port, string ssdp, string mdns, string snmp, bool portOpen)
     {
+        // For each IP, we make multiple calls to AppendResult.
+        // Because AppendResult is locked, we won't interleave lines from other threads.
         AppendResult($"IP: {ip}", ConsoleColor.Yellow);
         AppendResult($"FQDN: {fqdn}", ConsoleColor.Green);
         AppendResult($"MAC: {mac}", ConsoleColor.Cyan);
