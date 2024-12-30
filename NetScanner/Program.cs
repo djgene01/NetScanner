@@ -1,20 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading.Tasks;
 using Terminal.Gui;
 
 class Program
 {
-    private static int[] CommonPorts = new[] { 22, 80, 443 }; // Will be updated from user input
+    private static int[] CommonPorts = new[] { 21, 22, 80, 443 }; // Will be updated from user input
     private const int ConnectTimeoutMs = 300;
     private const int PingTimeoutMs = 300;
-    private const int SsdpTimeoutMs = 1000;
+    private const int SsdpTimeoutMs = 300;
 
     [DllImport("iphlpapi.dll", ExactSpelling = true)]
     private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr, ref uint physicalAddrLen);
