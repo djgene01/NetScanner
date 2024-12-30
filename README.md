@@ -8,3 +8,6 @@ Search for MAC address
 Will add more as i think of it. This is meant as a personal tool but if you can make use of it great.
 
 Written in Dotnet 9 Console using Terminal.GUI for UI
+
+Notabile Updates:
+Multithreaded, scan a 254 subnet in about 15 seconds.
