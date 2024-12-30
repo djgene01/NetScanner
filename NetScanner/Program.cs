@@ -12,7 +12,7 @@ using Terminal.Gui;
 
 class Program
 {
-    private static int[] CommonPorts = new[] { 22, 80, 443 };
+    private static int[] CommonPorts = { 22, 80, 443 };
     private const int ConnectTimeoutMs = 300;
     private const int PingTimeoutMs = 300;
     private const int SsdpTimeoutMs = 1000;
@@ -31,9 +31,10 @@ class Program
     static ProgressBar progressBar;
     static Button traceButton;
 
-    // A lock to prevent interleaving of results in the UI
-    private static readonly object resultsLock = new object();
+    // NEW: Checkbox to hide hosts without open ports
+    static CheckBox hideNonOpenCheckBox;
 
+    private static readonly object resultsLock = new object();
     static List<ScanResult> scanResults = new List<ScanResult>();
 
     static async Task Main()
@@ -41,7 +42,7 @@ class Program
         Application.Init();
         var top = Application.Top;
 
-        var win = new Window("Network Scanner")
+        var win = new Window("NetScanner")
         {
             X = 0,
             Y = 0,
@@ -49,6 +50,7 @@ class Program
             Height = Dim.Fill()
         };
 
+        // Subnet
         var subnetLabel = new Label("Subnet (e.g. 192.168.1): ") { X = 1, Y = 1 };
         subnetField = new TextField("192.168.1")
         {
@@ -57,6 +59,7 @@ class Program
             Width = 20
         };
 
+        // Start IP
         var startLabel = new Label("Start IP: ") { X = 1, Y = 3 };
         startHostField = new TextField("1")
         {
@@ -65,6 +68,7 @@ class Program
             Width = 5
         };
 
+        // End IP
         var endLabel = new Label("End IP: ") { X = 1, Y = 5 };
         endHostField = new TextField("254")
         {
@@ -73,6 +77,7 @@ class Program
             Width = 5
         };
 
+        // Ports
         var portsLabel = new Label("Ports (comma sep): ") { X = 1, Y = 7 };
         portsField = new TextField("22,80,443")
         {
@@ -81,19 +86,24 @@ class Program
             Width = 20
         };
 
-        var threadsLabel = new Label("Threads (default 16): ") { X = 1, Y = 9 };
-        threadsField = new TextField("16")
+        // Threads
+        var threadsLabel = new Label("Threads (default 32): ") { X = 1, Y = 9 };
+        threadsField = new TextField("32")
         {
             X = Pos.Right(threadsLabel) + 1,
             Y = Pos.Top(threadsLabel),
             Width = 5
         };
 
-        scanButton = new Button("Start Scan")
+        // NEW: Hide-non-open checkbox
+        hideNonOpenCheckBox = new CheckBox("Hide non-open?", false)
         {
-            X = 1,
-            Y = 11
+            X = Pos.Right(threadsField) + 5,
+            Y = 9
         };
+
+        // Buttons
+        scanButton = new Button("Start Scan") { X = 1, Y = 11 };
         scanButton.Clicked += async () => await StartScan();
 
         exportButton = new Button("Export CSV")
@@ -103,14 +113,14 @@ class Program
         };
         exportButton.Clicked += ExportToCsv;
 
-        // NEW: Trace Route button
         traceButton = new Button("Trace Route")
         {
             X = Pos.Right(exportButton) + 5,
             Y = 11
         };
-        traceButton.Clicked += ShowTraceRouteDialog;  // We'll define this method below
+        traceButton.Clicked += ShowTraceRouteDialog;
 
+        // Progress bar
         progressBar = new ProgressBar()
         {
             X = 1,
@@ -120,6 +130,7 @@ class Program
             Fraction = 0f
         };
 
+        // Results text view
         resultsView = new TextView()
         {
             X = 1,
@@ -128,17 +139,18 @@ class Program
             Height = Dim.Fill() - 1,
             ReadOnly = true,
             WordWrap = true,
-            Multiline = true,
+            Multiline = true
         };
 
+        // Add controls to window
         win.Add(
             subnetLabel, subnetField,
             startLabel, startHostField,
             endLabel, endHostField,
             portsLabel, portsField,
             threadsLabel, threadsField,
-            scanButton, exportButton,
-            traceButton,        // Add the new button
+            hideNonOpenCheckBox, // <--- new checkbox
+            scanButton, exportButton, traceButton,
             progressBar,
             resultsView
         );
@@ -147,7 +159,7 @@ class Program
         Application.Run();
     }
 
-    // Popup dialog for Trace Route
+    // Show trace route dialog
     private static void ShowTraceRouteDialog()
     {
         var dialog = new Dialog("Trace Route", 60, 20);
@@ -160,22 +172,16 @@ class Program
             Width = 25
         };
 
-        var startButton = new Button("Start")
-        {
-            X = 1,
-            Y = 3
-        };
+        var startButton = new Button("Start") { X = 1, Y = 3 };
 
-        // Progress bar or simple label to indicate "in progress"
         var traceProgress = new ProgressBar()
         {
             X = Pos.Right(startButton) + 2,
             Y = Pos.Top(startButton),
             Width = 15,
-            Visible = false // hidden by default
+            Visible = false
         };
 
-        // Results area
         var traceResults = new TextView
         {
             X = 1,
@@ -187,7 +193,6 @@ class Program
             Multiline = true
         };
 
-        // Start the tracer in a background task
         startButton.Clicked += async () =>
         {
             traceResults.Text = "";
@@ -198,25 +203,16 @@ class Program
                 return;
             }
 
-            // Show our "in progress" indicator
             traceProgress.Visible = true;
             traceProgress.Fraction = 0f;
 
-            // Kick off the trace route
-            List<string> hops = await Tracer.TraceRoute(input,
-                onHopProgress: (currentTtl, maxHops) =>
-                {
-                    // Update the progress bar fraction after each hop
-                    Application.MainLoop.Invoke(() =>
-                    {
-                        traceProgress.Fraction = (float)currentTtl / maxHops;
-                    });
-                });
+            var hops = await Tracer.TraceRoute(input, (currentTtl, maxHops) =>
+            {
+                Application.MainLoop.Invoke(() => traceProgress.Fraction = (float)currentTtl / maxHops);
+            });
 
-            // Once done, hide the progress bar
             traceProgress.Visible = false;
 
-            // Display results
             foreach (var hop in hops)
             {
                 traceResults.Text += hop + "\n";
@@ -227,18 +223,15 @@ class Program
         Application.Run(dialog);
     }
 
-
     private static async Task StartScan()
     {
-        // Clear old results
         scanResults.Clear();
         resultsView.Text = "";
 
-        // Parse inputs
         string subnet = subnetField.Text.ToString().Trim();
         if (string.IsNullOrWhiteSpace(subnet))
         {
-            AppendResult("Invalid subnet.", ConsoleColor.Red);
+            AppendResult("Invalid subnet.");
             return;
         }
 
@@ -263,14 +256,14 @@ class Program
                 CommonPorts = portList.ToArray();
         }
 
-        AppendResult("Scanning...\n", ConsoleColor.White);
+        AppendResult("Scanning...\n");
 
         await Task.Run(async () =>
         {
             int total = endHost - startHost + 1;
             int count = 0;
 
-            var tasks = new List<Task>();
+            var tasks = new List<Task>(total);
             var sem = new SemaphoreSlim(threadCount);
 
             for (int i = startHost; i <= endHost; i++)
@@ -287,11 +280,9 @@ class Program
                             string fqdn = GetFqdn(ipStr);
                             string mac = GetMacAddress(ipStr);
                             string ssdpInfo = await GetSsdpInfo(ipStr);
-                            string mdnsInfo = GetMdnsInfo(ipStr);
-                            string snmpInfo = GetSnmpInfo(ipStr);
 
                             bool anyPortOpen = false;
-                            List<int> openPorts = new List<int>();
+                            var openPorts = new List<int>();
 
                             foreach (var port in CommonPorts)
                             {
@@ -299,24 +290,26 @@ class Program
                                 {
                                     anyPortOpen = true;
                                     openPorts.Add(port);
-                                    AppendDeviceInfo(ipStr, fqdn, mac, port, ssdpInfo, mdnsInfo, snmpInfo, true);
                                 }
                             }
 
-                            if (!anyPortOpen)
+                            // only show or store this device if:
+                            // either it has open ports or the user didn't check "Hide non-open"
+                            if (anyPortOpen || !hideNonOpenCheckBox.Checked)
                             {
-                                AppendDeviceInfo(ipStr, fqdn, mac, 0, ssdpInfo, mdnsInfo, snmpInfo, false);
+                                // append the results to UI
+                                AppendDeviceInfo(ipStr, fqdn, mac, openPorts, ssdpInfo, anyPortOpen);
                             }
 
+                            // Always store them in scanResults, but we might skip displaying
+                            // if hideNonOpen is set
                             scanResults.Add(new ScanResult
                             {
                                 IP = ipStr,
                                 FQDN = fqdn,
                                 MAC = mac,
-                                OpenPorts = openPorts.Count > 0 ? string.Join(";", openPorts) : "",
-                                SSDP = ssdpInfo,
-                                MDNS = mdnsInfo,
-                                SNMP = snmpInfo
+                                OpenPorts = anyPortOpen ? string.Join(";", openPorts) : "",
+                                SSDP = ssdpInfo
                             });
                         }
                     }
@@ -324,56 +317,15 @@ class Program
                     {
                         int newCount = Interlocked.Increment(ref count);
                         float fraction = (float)newCount / total;
-                        Application.MainLoop.Invoke(() =>
-                        {
-                            progressBar.Fraction = fraction;
-                        });
+                        Application.MainLoop.Invoke(() => progressBar.Fraction = fraction);
                         sem.Release();
                     }
                 }));
             }
 
             await Task.WhenAll(tasks);
-            AppendResult("\nScan complete.", ConsoleColor.White);
+            AppendResult("\nScan complete.");
         });
-    }
-
-    private static void ExportToCsv()
-    {
-        var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
-        Application.Run(saveDialog);
-
-        if (!saveDialog.Canceled)
-        {
-            var path = saveDialog.FilePath.ToString();
-            if (!string.IsNullOrWhiteSpace(path))
-            {
-                try
-                {
-                    using var sw = new StreamWriter(path);
-                    sw.WriteLine("IP,FQDN,MAC,OpenPorts,SSDP,MDNS,SNMP");
-                    foreach (var r in scanResults)
-                    {
-                        sw.WriteLine($"{EscapeCsv(r.IP)},{EscapeCsv(r.FQDN)},{EscapeCsv(r.MAC)},{EscapeCsv(r.OpenPorts)},{EscapeCsv(r.SSDP)},{EscapeCsv(r.MDNS)},{EscapeCsv(r.SNMP)}");
-                    }
-                    AppendResult($"Exported to {path}", ConsoleColor.Green);
-                }
-                catch (Exception ex)
-                {
-                    AppendResult($"Error exporting: {ex.Message}", ConsoleColor.Red);
-                }
-            }
-        }
-    }
-
-    private static string EscapeCsv(string value)
-    {
-        if (value == null) return "";
-        if (value.Contains(",") || value.Contains("\"") || value.Contains("\n"))
-        {
-            return "\"" + value.Replace("\"", "\"\"") + "\"";
-        }
-        return value;
     }
 
     private static async Task<bool> IsPortOpenAsync(string ip, int port)
@@ -414,7 +366,9 @@ class Program
         try
         {
             var hostEntry = Dns.GetHostEntry(ip);
-            return !string.IsNullOrWhiteSpace(hostEntry.HostName) ? hostEntry.HostName : "Unknown Host";
+            return !string.IsNullOrWhiteSpace(hostEntry.HostName)
+                ? hostEntry.HostName
+                : "Unknown Host";
         }
         catch
         {
@@ -426,11 +380,11 @@ class Program
     {
         try
         {
-            IPAddress ipAddress = IPAddress.Parse(ip);
-            byte[] addrBytes = ipAddress.GetAddressBytes();
+            var ipAddress = IPAddress.Parse(ip);
+            var addrBytes = ipAddress.GetAddressBytes();
             uint destIp = BitConverter.ToUInt32(addrBytes, 0);
 
-            byte[] macAddr = new byte[6];
+            var macAddr = new byte[6];
             uint macLen = (uint)macAddr.Length;
 
             int result = SendARP(destIp, 0, macAddr, ref macLen);
@@ -463,13 +417,13 @@ class Program
             udpClient.Client.ReceiveTimeout = SsdpTimeoutMs;
 
             var remoteEndpoint = new IPEndPoint(IPAddress.Parse(ip), 1900);
-            byte[] requestBytes = Encoding.ASCII.GetBytes(string.Format(ssdpRequest, ip));
+            var requestBytes = Encoding.ASCII.GetBytes(string.Format(ssdpRequest, ip));
             await udpClient.SendAsync(requestBytes, requestBytes.Length, remoteEndpoint);
 
             var result = await udpClient.ReceiveAsync().WaitAsync(TimeSpan.FromMilliseconds(SsdpTimeoutMs));
-            string response = Encoding.ASCII.GetString(result.Buffer);
+            var response = Encoding.ASCII.GetString(result.Buffer);
 
-            string[] lines = response.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+            var lines = response.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
             foreach (var line in lines)
             {
                 if (line.StartsWith("SERVER:", StringComparison.OrdinalIgnoreCase) ||
@@ -486,27 +440,51 @@ class Program
         }
     }
 
-    private static string GetMdnsInfo(string ip)
+    private static void ExportToCsv()
     {
-        return "-"; // Placeholder
+        var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
+        Application.Run(saveDialog);
+
+        if (saveDialog.Canceled) return;
+
+        var path = saveDialog.FilePath.ToString();
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        try
+        {
+            using var sw = new StreamWriter(path);
+            sw.WriteLine("IP,FQDN,MAC,OpenPorts,SSDP,MDNS,SNMP");
+            foreach (var r in scanResults)
+            {
+                sw.WriteLine($"{EscapeCsv(r.IP)},{EscapeCsv(r.FQDN)},{EscapeCsv(r.MAC)},{EscapeCsv(r.OpenPorts)},{EscapeCsv(r.SSDP)},{EscapeCsv(r.MDNS)},{EscapeCsv(r.SNMP)}");
+            }
+            AppendResult($"Exported to {path}");
+        }
+        catch (Exception ex)
+        {
+            AppendResult($"Error exporting: {ex.Message}");
+        }
     }
 
-    private static string GetSnmpInfo(string ip)
+    private static string EscapeCsv(string value)
     {
-        return "-"; // Placeholder
+        if (string.IsNullOrEmpty(value)) return "";
+        if (value.Contains(",") || value.Contains("\"") || value.Contains("\n"))
+        {
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 
-    private static void AppendResult(string text, ConsoleColor color)
+    private static void AppendResult(string text)
     {
         lock (resultsLock)
         {
             Application.MainLoop.Invoke(() =>
             {
-                resultsView.ColorScheme = GetColorSchemeFor(color);
                 resultsView.ReadOnly = false;
                 resultsView.Text += text + "\n";
                 resultsView.ReadOnly = true;
-
                 if (resultsView.CanFocus)
                 {
                     resultsView.CursorPosition = new Point(0, resultsView.Lines - 1);
@@ -516,69 +494,19 @@ class Program
         }
     }
 
-    private static void AppendDeviceInfo(
-        string ip, string fqdn, string mac,
-        int port, string ssdp, string mdns, string snmp, bool portOpen)
+    // Overloaded version that prints device info with known open ports
+    private static void AppendDeviceInfo(string ip, string fqdn, string mac, List<int> openPorts, string ssdp, bool anyPortOpen)
     {
-        // For each IP, we make multiple calls to AppendResult.
-        // Because AppendResult is locked, we won't interleave lines from other threads.
-        AppendResult($"IP: {ip}", ConsoleColor.Yellow);
-        AppendResult($"FQDN: {fqdn}", ConsoleColor.Green);
-        AppendResult($"MAC: {mac}", ConsoleColor.Cyan);
+        AppendResult($"IP: {ip}");
+        AppendResult($"FQDN: {fqdn}");
+        AppendResult($"MAC: {mac}");
 
-        if (portOpen && port != 0)
-        {
-            AppendResult($"Port {port} open", ConsoleColor.Magenta);
-        }
-        else if (!portOpen)
-        {
-            AppendResult($"No common ports open", ConsoleColor.DarkGray);
-        }
+        if (anyPortOpen)
+            AppendResult($"Open Ports: {string.Join(",", openPorts)}");
+        else
+            AppendResult("No common ports open");
 
-        AppendResult($"SSDP: {ssdp}", ConsoleColor.Gray);
-        AppendResult($"mDNS: {mdns}", ConsoleColor.Gray);
-        AppendResult($"SNMP: {snmp}", ConsoleColor.Gray);
-        AppendResult("---------------------------------", ConsoleColor.White);
-    }
-
-    private static ColorScheme GetColorSchemeFor(ConsoleColor consoleColor)
-    {
-        var scheme = new ColorScheme();
-        Terminal.Gui.Attribute fg;
-        switch (consoleColor)
-        {
-            case ConsoleColor.Red:
-                fg = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Black);
-                break;
-            case ConsoleColor.Yellow:
-                fg = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Black);
-                break;
-            case ConsoleColor.Green:
-                fg = Terminal.Gui.Attribute.Make(Color.BrightGreen, Color.Black);
-                break;
-            case ConsoleColor.Cyan:
-                fg = Terminal.Gui.Attribute.Make(Color.BrightCyan, Color.Black);
-                break;
-            case ConsoleColor.Magenta:
-                fg = Terminal.Gui.Attribute.Make(Color.BrightMagenta, Color.Black);
-                break;
-            case ConsoleColor.DarkGray:
-                fg = Terminal.Gui.Attribute.Make(Color.Gray, Color.Black);
-                break;
-            case ConsoleColor.Gray:
-                fg = Terminal.Gui.Attribute.Make(Color.White, Color.Black);
-                break;
-            case ConsoleColor.White:
-            default:
-                fg = Terminal.Gui.Attribute.Make(Color.White, Color.Black);
-                break;
-        }
-
-        scheme.Normal = fg;
-        scheme.Focus = fg;
-        scheme.HotNormal = fg;
-        scheme.HotFocus = fg;
-        return scheme;
+        AppendResult("---------------------------------");
     }
 
     private class ScanResult
