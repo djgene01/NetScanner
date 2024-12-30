@@ -1,16 +1,28 @@
-﻿using System.Net;
+﻿// Only the updated code is shown below. 
+// Changes:
+// 1. Added a "Threads (default 16)" label and TextField to let users specify thread count.
+// 2. In StartScan(), we parse the thread count and use a SemaphoreSlim for concurrent scans.
+// 3. The scanning loop is replaced with a parallel tasks approach, updating the progress bar 
+//    as each task finishes.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Terminal.Gui;
 
 class Program
 {
-    private static int[] CommonPorts = new[] { 21, 22, 80, 443 }; // Will be updated from user input
+    private static int[] CommonPorts = new[] { 22, 80, 443 };
     private const int ConnectTimeoutMs = 300;
     private const int PingTimeoutMs = 300;
-    private const int SsdpTimeoutMs = 300;
+    private const int SsdpTimeoutMs = 1000;
 
     [DllImport("iphlpapi.dll", ExactSpelling = true)]
     private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr, ref uint physicalAddrLen);
@@ -19,21 +31,19 @@ class Program
     static TextField startHostField;
     static TextField endHostField;
     static TextField portsField;
+    static TextField threadsField;        // <--- New field for thread count
     static TextView resultsView;
     static Button scanButton;
-    static ProgressBar progressBar;
     static Button exportButton;
+    static ProgressBar progressBar;
 
-    // Store results for CSV export
     static List<ScanResult> scanResults = new List<ScanResult>();
 
     static async Task Main()
     {
         Application.Init();
-
         var top = Application.Top;
 
-        // Create a window to hold UI elements
         var win = new Window("Network Scanner")
         {
             X = 0,
@@ -42,11 +52,7 @@ class Program
             Height = Dim.Fill()
         };
 
-        var subnetLabel = new Label("Subnet (e.g. 192.168.1): ")
-        {
-            X = 1,
-            Y = 1
-        };
+        var subnetLabel = new Label("Subnet (e.g. 192.168.1): ") { X = 1, Y = 1 };
         subnetField = new TextField("192.168.1")
         {
             X = Pos.Right(subnetLabel) + 1,
@@ -54,11 +60,7 @@ class Program
             Width = 20
         };
 
-        var startLabel = new Label("Start IP: ")
-        {
-            X = 1,
-            Y = 3
-        };
+        var startLabel = new Label("Start IP: ") { X = 1, Y = 3 };
         startHostField = new TextField("1")
         {
             X = Pos.Right(startLabel) + 1,
@@ -66,11 +68,7 @@ class Program
             Width = 5
         };
 
-        var endLabel = new Label("End IP: ")
-        {
-            X = 1,
-            Y = 5
-        };
+        var endLabel = new Label("End IP: ") { X = 1, Y = 5 };
         endHostField = new TextField("254")
         {
             X = Pos.Right(endLabel) + 1,
@@ -78,11 +76,7 @@ class Program
             Width = 5
         };
 
-        var portsLabel = new Label("Ports (comma sep): ")
-        {
-            X = 1,
-            Y = 7
-        };
+        var portsLabel = new Label("Ports (comma sep): ") { X = 1, Y = 7 };
         portsField = new TextField("22,80,443")
         {
             X = Pos.Right(portsLabel) + 1,
@@ -90,24 +84,33 @@ class Program
             Width = 20
         };
 
+        // New label & field for thread count
+        var threadsLabel = new Label("Threads (default 16): ") { X = 1, Y = 9 };
+        threadsField = new TextField("16")
+        {
+            X = Pos.Right(threadsLabel) + 1,
+            Y = Pos.Top(threadsLabel),
+            Width = 5
+        };
+
         scanButton = new Button("Start Scan")
         {
             X = 1,
-            Y = 9
+            Y = 11
         };
         scanButton.Clicked += async () => await StartScan();
 
         exportButton = new Button("Export CSV")
         {
             X = Pos.Right(scanButton) + 5,
-            Y = 9
+            Y = 11
         };
         exportButton.Clicked += ExportToCsv;
 
         progressBar = new ProgressBar()
         {
             X = 1,
-            Y = 11,
+            Y = 13,
             Width = Dim.Fill() - 2,
             Height = 1,
             Fraction = 0f
@@ -116,7 +119,7 @@ class Program
         resultsView = new TextView()
         {
             X = 1,
-            Y = 13,
+            Y = 15,
             Width = Dim.Fill() - 2,
             Height = Dim.Fill() - 1,
             ReadOnly = true,
@@ -124,14 +127,17 @@ class Program
             Multiline = true,
         };
 
+        // Add controls to the window
         win.Add(
             subnetLabel, subnetField,
             startLabel, startHostField,
             endLabel, endHostField,
             portsLabel, portsField,
+            threadsLabel, threadsField,
             scanButton, exportButton,
             progressBar,
-            resultsView);
+            resultsView
+        );
 
         top.Add(win);
         Application.Run();
@@ -139,7 +145,7 @@ class Program
 
     private static async Task StartScan()
     {
-        // Clear previous results
+        // Clear old results
         scanResults.Clear();
         resultsView.Text = "";
 
@@ -155,6 +161,8 @@ class Program
             startHost = 1;
         if (!int.TryParse(endHostField.Text.ToString().Trim(), out int endHost))
             endHost = 254;
+        if (!int.TryParse(threadsField.Text.ToString().Trim(), out int threadCount))
+            threadCount = 16;
 
         var portsInput = portsField.Text.ToString().Trim();
         if (!string.IsNullOrWhiteSpace(portsInput))
@@ -177,69 +185,78 @@ class Program
             int total = endHost - startHost + 1;
             int count = 0;
 
+            var tasks = new List<Task>();
+            var sem = new SemaphoreSlim(threadCount);
+
             for (int i = startHost; i <= endHost; i++)
             {
                 string ipStr = $"{subnet}.{i}";
 
-                if (await IsHostReachable(ipStr))
+                tasks.Add(Task.Run(async () =>
                 {
-                    string fqdn = GetFqdn(ipStr);
-                    string mac = GetMacAddress(ipStr);
-                    string ssdpInfo = await GetSsdpInfo(ipStr);
-                    string mdnsInfo = GetMdnsInfo(ipStr);
-                    string snmpInfo = GetSnmpInfo(ipStr);
-
-                    bool anyPortOpen = false;
-                    List<int> openPorts = new List<int>();
-
-                    foreach (var port in CommonPorts)
+                    await sem.WaitAsync();
+                    try
                     {
-                        if (await IsPortOpenAsync(ipStr, port))
+                        if (await IsHostReachable(ipStr))
                         {
-                            anyPortOpen = true;
-                            openPorts.Add(port);
-                            AppendDeviceInfo(ipStr, fqdn, mac, port, ssdpInfo, mdnsInfo, snmpInfo, true);
+                            string fqdn = GetFqdn(ipStr);
+                            string mac = GetMacAddress(ipStr);
+                            string ssdpInfo = await GetSsdpInfo(ipStr);
+                            string mdnsInfo = GetMdnsInfo(ipStr);
+                            string snmpInfo = GetSnmpInfo(ipStr);
+
+                            bool anyPortOpen = false;
+                            List<int> openPorts = new List<int>();
+
+                            foreach (var port in CommonPorts)
+                            {
+                                if (await IsPortOpenAsync(ipStr, port))
+                                {
+                                    anyPortOpen = true;
+                                    openPorts.Add(port);
+                                    AppendDeviceInfo(ipStr, fqdn, mac, port, ssdpInfo, mdnsInfo, snmpInfo, true);
+                                }
+                            }
+
+                            if (!anyPortOpen)
+                            {
+                                AppendDeviceInfo(ipStr, fqdn, mac, 0, ssdpInfo, mdnsInfo, snmpInfo, false);
+                            }
+
+                            scanResults.Add(new ScanResult
+                            {
+                                IP = ipStr,
+                                FQDN = fqdn,
+                                MAC = mac,
+                                OpenPorts = openPorts.Count > 0 ? string.Join(";", openPorts) : "",
+                                SSDP = ssdpInfo,
+                                MDNS = mdnsInfo,
+                                SNMP = snmpInfo
+                            });
                         }
                     }
-
-                    if (!anyPortOpen)
+                    finally
                     {
-                        AppendDeviceInfo(ipStr, fqdn, mac, 0, ssdpInfo, mdnsInfo, snmpInfo, false);
+                        // Update progress & release the semaphore
+                        int newCount = Interlocked.Increment(ref count);
+                        float fraction = (float)newCount / total;
+                        Application.MainLoop.Invoke(() =>
+                        {
+                            progressBar.Fraction = fraction;
+                        });
+                        sem.Release();
                     }
-
-                    // Add to results
-                    scanResults.Add(new ScanResult
-                    {
-                        IP = ipStr,
-                        FQDN = fqdn,
-                        MAC = mac,
-                        OpenPorts = openPorts.Count > 0 ? string.Join(";", openPorts) : "",
-                        SSDP = ssdpInfo,
-                        MDNS = mdnsInfo,
-                        SNMP = snmpInfo
-                    });
-                }
-
-                count++;
-                float fraction = (float)count / total;
-                Application.MainLoop.Invoke(() =>
-                {
-                    progressBar.Fraction = fraction;
-                });
+                }));
             }
 
+            await Task.WhenAll(tasks);
             AppendResult("\nScan complete.", ConsoleColor.White);
         });
     }
 
     private static void ExportToCsv()
     {
-        // Prompt for file name
-        var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV")
-        {
-            //AllowedTypes = new[] { ".csv" }
-        };
-
+        var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
         Application.Run(saveDialog);
 
         if (!saveDialog.Canceled)
@@ -250,11 +267,9 @@ class Program
                 try
                 {
                     using var sw = new StreamWriter(path);
-                    // Write header
                     sw.WriteLine("IP,FQDN,MAC,OpenPorts,SSDP,MDNS,SNMP");
                     foreach (var r in scanResults)
                     {
-                        // CSV sanitize
                         sw.WriteLine($"{EscapeCsv(r.IP)},{EscapeCsv(r.FQDN)},{EscapeCsv(r.MAC)},{EscapeCsv(r.OpenPorts)},{EscapeCsv(r.SSDP)},{EscapeCsv(r.MDNS)},{EscapeCsv(r.SNMP)}");
                     }
                     AppendResult($"Exported to {path}", ConsoleColor.Green);
@@ -279,7 +294,7 @@ class Program
 
     private static async Task<bool> IsPortOpenAsync(string ip, int port)
     {
-        using var cts = new System.Threading.CancellationTokenSource(ConnectTimeoutMs);
+        using var cts = new CancellationTokenSource(ConnectTimeoutMs);
         using var client = new TcpClient();
         try
         {
@@ -405,17 +420,18 @@ class Program
             resultsView.ReadOnly = false;
             resultsView.Text += text + "\n";
             resultsView.ReadOnly = true;
-            // Scroll to end if available
-            if (resultsView.CanFocus) // Just a condition check
+
+            if (resultsView.CanFocus)
             {
                 resultsView.CursorPosition = new Point(0, resultsView.Lines - 1);
             }
-
             resultsView.SetNeedsDisplay();
         });
     }
 
-    private static void AppendDeviceInfo(string ip, string fqdn, string mac, int port, string ssdp, string mdns, string snmp, bool portOpen)
+    private static void AppendDeviceInfo(
+        string ip, string fqdn, string mac,
+        int port, string ssdp, string mdns, string snmp, bool portOpen)
     {
         AppendResult($"IP: {ip}", ConsoleColor.Yellow);
         AppendResult($"FQDN: {fqdn}", ConsoleColor.Green);
@@ -440,7 +456,6 @@ class Program
     {
         var scheme = new ColorScheme();
         Terminal.Gui.Attribute fg;
-
         switch (consoleColor)
         {
             case ConsoleColor.Red:
