@@ -29,6 +29,7 @@ class Program
     static Button scanButton;
     static Button exportButton;
     static ProgressBar progressBar;
+    static Button traceButton;
 
     // A lock to prevent interleaving of results in the UI
     private static readonly object resultsLock = new object();
@@ -102,6 +103,14 @@ class Program
         };
         exportButton.Clicked += ExportToCsv;
 
+        // NEW: Trace Route button
+        traceButton = new Button("Trace Route")
+        {
+            X = Pos.Right(exportButton) + 5,
+            Y = 11
+        };
+        traceButton.Clicked += ShowTraceRouteDialog;  // We'll define this method below
+
         progressBar = new ProgressBar()
         {
             X = 1,
@@ -129,6 +138,7 @@ class Program
             portsLabel, portsField,
             threadsLabel, threadsField,
             scanButton, exportButton,
+            traceButton,        // Add the new button
             progressBar,
             resultsView
         );
@@ -136,6 +146,87 @@ class Program
         top.Add(win);
         Application.Run();
     }
+
+    // Popup dialog for Trace Route
+    private static void ShowTraceRouteDialog()
+    {
+        var dialog = new Dialog("Trace Route", 60, 20);
+
+        var ipLabel = new Label("IP/Host:") { X = 1, Y = 1 };
+        var ipField = new TextField("")
+        {
+            X = Pos.Right(ipLabel),
+            Y = Pos.Top(ipLabel),
+            Width = 25
+        };
+
+        var startButton = new Button("Start")
+        {
+            X = 1,
+            Y = 3
+        };
+
+        // Progress bar or simple label to indicate "in progress"
+        var traceProgress = new ProgressBar()
+        {
+            X = Pos.Right(startButton) + 2,
+            Y = Pos.Top(startButton),
+            Width = 15,
+            Visible = false // hidden by default
+        };
+
+        // Results area
+        var traceResults = new TextView
+        {
+            X = 1,
+            Y = 5,
+            Width = Dim.Fill() - 2,
+            Height = Dim.Fill() - 1,
+            ReadOnly = true,
+            WordWrap = false,
+            Multiline = true
+        };
+
+        // Start the tracer in a background task
+        startButton.Clicked += async () =>
+        {
+            traceResults.Text = "";
+            string input = ipField.Text.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                traceResults.Text = "Invalid IP/Host.";
+                return;
+            }
+
+            // Show our "in progress" indicator
+            traceProgress.Visible = true;
+            traceProgress.Fraction = 0f;
+
+            // Kick off the trace route
+            List<string> hops = await Tracer.TraceRoute(input,
+                onHopProgress: (currentTtl, maxHops) =>
+                {
+                    // Update the progress bar fraction after each hop
+                    Application.MainLoop.Invoke(() =>
+                    {
+                        traceProgress.Fraction = (float)currentTtl / maxHops;
+                    });
+                });
+
+            // Once done, hide the progress bar
+            traceProgress.Visible = false;
+
+            // Display results
+            foreach (var hop in hops)
+            {
+                traceResults.Text += hop + "\n";
+            }
+        };
+
+        dialog.Add(ipLabel, ipField, startButton, traceProgress, traceResults);
+        Application.Run(dialog);
+    }
+
 
     private static async Task StartScan()
     {
