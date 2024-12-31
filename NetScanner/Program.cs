@@ -1,4 +1,5 @@
-﻿using System;
+﻿using NetScanner;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -13,9 +14,9 @@ using Terminal.Gui;
 class Program
 {
     private static int[] CommonPorts = { 22, 80, 443 };
-    private const int ConnectTimeoutMs = 300;
-    private const int PingTimeoutMs = 300;
-    private const int SsdpTimeoutMs = 1000;
+    private const int ConnectTimeoutMs = 200;
+    private const int PingTimeoutMs = 200;
+    private const int SsdpTimeoutMs = 200;
 
     [DllImport("iphlpapi.dll", ExactSpelling = true)]
     private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr, ref uint physicalAddrLen);
@@ -31,10 +32,10 @@ class Program
     static ProgressBar progressBar;
     static Button traceButton;
 
-    // NEW: Checkbox to hide hosts without open ports
     static CheckBox hideNonOpenCheckBox;
 
     private static readonly object resultsLock = new object();
+
     static List<ScanResult> scanResults = new List<ScanResult>();
 
     static async Task Main()
@@ -159,7 +160,6 @@ class Program
         Application.Run();
     }
 
-    // Show trace route dialog
     private static void ShowTraceRouteDialog()
     {
         var dialog = new Dialog("Trace Route", 60, 20);
@@ -494,7 +494,6 @@ class Program
         }
     }
 
-    // Overloaded version that prints device info with known open ports
     private static void AppendDeviceInfo(string ip, string fqdn, string mac, List<int> openPorts, string ssdp, bool anyPortOpen)
     {
         AppendResult($"IP: {ip}");
@@ -509,14 +508,5 @@ class Program
         AppendResult("---------------------------------");
     }
 
-    private class ScanResult
-    {
-        public string IP { get; set; }
-        public string FQDN { get; set; }
-        public string MAC { get; set; }
-        public string OpenPorts { get; set; }
-        public string SSDP { get; set; }
-        public string MDNS { get; set; }
-        public string SNMP { get; set; }
-    }
+
 }
