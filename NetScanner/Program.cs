@@ -14,13 +14,8 @@ using Terminal.Gui;
 
 class Program
 {
+    // We only keep CommonPorts here, as references to NetworkUtils for the rest.
     private static int[] CommonPorts = { 22, 80, 443 };
-    private const int ConnectTimeoutMs = 300;
-    private const int PingTimeoutMs = 300;
-    private const int SsdpTimeoutMs = 1000;
-
-    [DllImport("iphlpapi.dll", ExactSpelling = true)]
-    private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr, ref uint physicalAddrLen);
 
     // UI fields
     static TextField subnetField;
@@ -165,7 +160,7 @@ class Program
             endLabel, endHostField,
             portsLabel, portsField,
             threadsLabel, threadsField,
-            hideNonOpenCheckBox, // <--- ADDED CHECKBOX
+            hideNonOpenCheckBox,
             scanButton, exportButton, traceButton,
             progressBar,
             resultsScrollView
@@ -180,22 +175,19 @@ class Program
     {
         lock (resultsLock)
         {
-            resultsScrollView.RemoveAll(); // remove old controls
+            resultsScrollView.RemoveAll();
             contentHeight = 0;
             resultsScrollView.ContentSize = new Size(0, 0);
         }
     }
 
-    // -------------------------------------------------------------------------
     // HELPER METHOD: Add a colored label in the results (with a custom color).
-    // -------------------------------------------------------------------------
     private static void AddResultLineColored(string text, Color fgColor)
     {
         lock (resultsLock)
         {
             Application.MainLoop.Invoke(() =>
             {
-                // Create a color scheme for this label
                 var scheme = new ColorScheme
                 {
                     Normal = Terminal.Gui.Attribute.Make(fgColor, Color.Blue),
@@ -220,7 +212,7 @@ class Program
         }
     }
 
-    // Adds a Label line (unchanged). We'll still use this for generic lines.
+    // Adds a Label line. We'll still use this for generic lines.
     private static void AddResultLine(string text)
     {
         // For generic messages, let's just call our colored method with White:
@@ -234,7 +226,6 @@ class Program
         {
             Application.MainLoop.Invoke(() =>
             {
-                // We'll color the button text in bright blue
                 var scheme = new ColorScheme
                 {
                     Normal = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Blue),
@@ -343,6 +334,7 @@ class Program
         Application.Run(dialog);
     }
 
+    // The primary scanning logic
     private static async Task StartScan()
     {
         scanResults.Clear();
@@ -394,11 +386,13 @@ class Program
                     await sem.WaitAsync();
                     try
                     {
-                        if (await IsHostReachable(ipStr))
+                        // Instead of local methods, you'd call your external
+                        // e.g., NetworkUtils methods here if you have them in a separate file
+                        if (await NetworkUtils.IsHostReachable(ipStr))
                         {
-                            string fqdn = GetFqdn(ipStr);
-                            string mac = GetMacAddress(ipStr);
-                            string ssdpInfo = await GetSsdpInfo(ipStr);
+                            string fqdn = NetworkUtils.GetFqdn(ipStr);
+                            string mac = NetworkUtils.GetMacAddress(ipStr);
+                            string ssdpInfo = await NetworkUtils.GetSsdpInfo(ipStr);
 
                             bool anyPortOpen = false;
                             var openPorts = new List<int>();
@@ -406,21 +400,19 @@ class Program
                             // Check each port
                             foreach (var port in CommonPorts)
                             {
-                                if (await IsPortOpenAsync(ipStr, port))
+                                if (await NetworkUtils.IsPortOpenAsync(ipStr, port))
                                 {
                                     anyPortOpen = true;
                                     openPorts.Add(port);
                                 }
                             }
 
-                            // If "Hide non-open?" is checked and no ports open -> skip
                             bool skipDisplay = (!anyPortOpen && hideNonOpenCheckBox.Checked);
 
                             if (!skipDisplay)
                             {
                                 if (anyPortOpen)
                                 {
-                                    // For each open port, color code the lines
                                     foreach (var p in openPorts)
                                     {
                                         AddResultLineColored($"IP: {ipStr}", Color.BrightYellow);
@@ -444,7 +436,6 @@ class Program
                                 }
                                 else
                                 {
-                                    // No ports open
                                     AddResultLineColored($"IP: {ipStr}", Color.BrightYellow);
                                     AddResultLineColored($"FQDN: {fqdn}", Color.BrightGreen);
                                     AddResultLineColored($"MAC: {mac}", Color.BrightCyan);
@@ -453,7 +444,6 @@ class Program
                                 }
                             }
 
-                            // For CSV
                             scanResults.Add(new ScanResult
                             {
                                 IP = ipStr,
@@ -478,126 +468,6 @@ class Program
             AddResultLine("Scan complete.");
         });
     }
-
-    // Shows info for no-port hosts
-    private static void AddHostNoPorts(string ip, string fqdn, string mac)
-    {
-        // Not used in the current code, but leaving it in case you'd like to call it:
-        AddResultLineColored($"IP: {ip}", Color.BrightYellow);
-        AddResultLineColored($"FQDN: {fqdn}", Color.BrightGreen);
-        AddResultLineColored($"MAC: {mac}", Color.BrightCyan);
-        AddResultLineColored("No common ports open", Color.Gray);
-        AddResultLine("---------------------------------");
-    }
-
-    private static async Task<bool> IsPortOpenAsync(string ip, int port)
-    {
-        using var cts = new CancellationTokenSource(ConnectTimeoutMs);
-        using var client = new TcpClient();
-        try
-        {
-            var connectTask = client.ConnectAsync(ip, port);
-            using (cts.Token.Register(() => client.Close()))
-            {
-                await connectTask;
-            }
-            return client.Connected;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static async Task<bool> IsHostReachable(string ip)
-    {
-        using var ping = new Ping();
-        try
-        {
-            var reply = await ping.SendPingAsync(ip, PingTimeoutMs);
-            return reply.Status == IPStatus.Success;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string GetFqdn(string ip)
-    {
-        try
-        {
-            var hostEntry = Dns.GetHostEntry(ip);
-            return !string.IsNullOrWhiteSpace(hostEntry.HostName) ? hostEntry.HostName : "Unknown Host";
-        }
-        catch
-        {
-            return "No Dns Name";
-        }
-    }
-
-    private static string GetMacAddress(string ip)
-    {
-        try
-        {
-            var ipAddress = IPAddress.Parse(ip);
-            var addrBytes = ipAddress.GetAddressBytes();
-            uint destIp = BitConverter.ToUInt32(addrBytes, 0);
-
-            var macAddr = new byte[6];
-            uint macLen = (uint)macAddr.Length;
-            int result = SendARP(destIp, 0, macAddr, ref macLen);
-            if (result != 0)
-            {
-                return "Unknown MAC";
-            }
-            return BitConverter.ToString(macAddr, 0, (int)macLen);
-        }
-        catch
-        {
-            return "Unknown MAC";
-        }
-    }
-
-    private static async Task<string> GetSsdpInfo(string ip)
-    {
-        const string ssdpRequest =
-            "M-SEARCH * HTTP/1.1\r\n" +
-            "HOST: {0}:1900\r\n" +
-            "MAN: \"ssdp:discover\"\r\n" +
-            "MX: 1\r\n" +
-            "ST: ssdp:all\r\n\r\n";
-
-        try
-        {
-            using var udpClient = new UdpClient();
-            udpClient.Client.SendTimeout = SsdpTimeoutMs;
-            udpClient.Client.ReceiveTimeout = SsdpTimeoutMs;
-
-            var remoteEndpoint = new IPEndPoint(IPAddress.Parse(ip), 1900);
-            var requestBytes = Encoding.ASCII.GetBytes(string.Format(ssdpRequest, ip));
-            await udpClient.SendAsync(requestBytes, requestBytes.Length, remoteEndpoint);
-
-            var result = await udpClient.ReceiveAsync().WaitAsync(TimeSpan.FromMilliseconds(SsdpTimeoutMs));
-            var response = Encoding.ASCII.GetString(result.Buffer);
-
-            var lines = response.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (var line in lines)
-            {
-                if (line.StartsWith("SERVER:", StringComparison.OrdinalIgnoreCase) ||
-                    line.StartsWith("LOCATION:", StringComparison.OrdinalIgnoreCase))
-                {
-                    return line;
-                }
-            }
-            return "-";
-        }
-        catch
-        {
-            return "-";
-        }
-    }
-
     private static void ExportToCsv()
     {
         var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
@@ -633,3 +503,4 @@ class Program
         return value;
     }
 }
+
