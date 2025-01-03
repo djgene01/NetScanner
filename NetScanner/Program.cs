@@ -27,7 +27,7 @@ class Program
     static Button exportButton;
     static Button traceButton;
 
-    // NEW: Checkbox to hide hosts that do NOT have open ports
+    // Checkbox to hide hosts that do NOT have open ports
     static CheckBox hideNonOpenCheckBox;
 
     // Progress bar
@@ -468,6 +468,7 @@ class Program
             AddResultLine("Scan complete.");
         });
     }
+
     private static void ExportToCsv()
     {
         var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
