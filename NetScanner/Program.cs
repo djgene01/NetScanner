@@ -1,4 +1,5 @@
-﻿using System;
+﻿using NetScanner;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -29,8 +30,13 @@ class Program
     static TextField threadsField;
     static Button scanButton;
     static Button exportButton;
-    static ProgressBar progressBar;
     static Button traceButton;
+
+    // NEW: Checkbox to hide hosts that do NOT have open ports
+    static CheckBox hideNonOpenCheckBox;
+
+    // Progress bar
+    static ProgressBar progressBar;
 
     // Scrollable view for results
     static ScrollView resultsScrollView;
@@ -102,6 +108,13 @@ class Program
             Width = 5
         };
 
+        // NEW: Hide non-open checkbox
+        hideNonOpenCheckBox = new CheckBox("Hide non-open?", false)
+        {
+            X = Pos.Right(threadsField) + 5,
+            Y = Pos.Top(threadsField)
+        };
+
         // Buttons
         scanButton = new Button("Start Scan") { X = 1, Y = 11 };
         scanButton.Clicked += async () => await StartScan();
@@ -140,8 +153,6 @@ class Program
 
             ShowVerticalScrollIndicator = true,
             ShowHorizontalScrollIndicator = false,
-
-            // Starting offset and content size
             ContentOffset = new Point(0, 0),
             ContentSize = new Size(0, 0),
             AutoHideScrollBars = false
@@ -154,6 +165,7 @@ class Program
             endLabel, endHostField,
             portsLabel, portsField,
             threadsLabel, threadsField,
+            hideNonOpenCheckBox, // <--- ADDED CHECKBOX
             scanButton, exportButton, traceButton,
             progressBar,
             resultsScrollView
@@ -174,35 +186,46 @@ class Program
         }
     }
 
-    // Adds a Label line
-    // Inside AddResultLine(...)
-    private static void AddResultLine(string text)
+    // -------------------------------------------------------------------------
+    // HELPER METHOD: Add a colored label in the results (with a custom color).
+    // -------------------------------------------------------------------------
+    private static void AddResultLineColored(string text, Color fgColor)
     {
         lock (resultsLock)
         {
             Application.MainLoop.Invoke(() =>
             {
+                // Create a color scheme for this label
+                var scheme = new ColorScheme
+                {
+                    Normal = Terminal.Gui.Attribute.Make(fgColor, Color.Blue),
+                    Focus = Terminal.Gui.Attribute.Make(fgColor, Color.DarkGray),
+                    HotNormal = Terminal.Gui.Attribute.Make(fgColor, Color.Blue),
+                    HotFocus = Terminal.Gui.Attribute.Make(fgColor, Color.DarkGray)
+                };
+
                 var lbl = new Label(text)
                 {
                     X = 0,
                     Y = contentHeight,
-                    // Let the label auto-size horizontally:
-                    AutoSize = true
+                    AutoSize = true,
+                    ColorScheme = scheme
                 };
+
                 resultsScrollView.Add(lbl);
-
-                contentHeight += 1;
-                // Set a width that matches the scrollView, or guess an arbitrary wide enough number
-                int scrollWidth = resultsScrollView.Bounds.Width;
-                // Increase content size in height by 1 line
-                resultsScrollView.ContentSize = new Size(scrollWidth, contentHeight);
-
-                // Force a redraw
+                contentHeight++;
+                resultsScrollView.ContentSize = new Size(resultsScrollView.Bounds.Width, contentHeight);
                 resultsScrollView.SetNeedsDisplay();
             });
         }
     }
 
+    // Adds a Label line (unchanged). We'll still use this for generic lines.
+    private static void AddResultLine(string text)
+    {
+        // For generic messages, let's just call our colored method with White:
+        AddResultLineColored(text, Color.White);
+    }
 
     // Adds a clickable button (for example, for port 80 or 443)
     private static void AddOpenUrlButton(string text, string url)
@@ -211,17 +234,27 @@ class Program
         {
             Application.MainLoop.Invoke(() =>
             {
+                // We'll color the button text in bright blue
+                var scheme = new ColorScheme
+                {
+                    Normal = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Blue),
+                    Focus = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.DarkGray),
+                    HotNormal = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Blue),
+                    HotFocus = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.DarkGray)
+                };
+
                 var btn = new Button(text)
                 {
                     X = 0,
-                    Y = contentHeight
+                    Y = contentHeight,
+                    ColorScheme = scheme
                 };
                 btn.Clicked += () => OpenUrlInDefaultBrowser(url);
+
                 resultsScrollView.Add(btn);
 
                 contentHeight++;
                 resultsScrollView.ContentSize = new Size(resultsScrollView.ContentSize.Width, contentHeight);
-
                 resultsScrollView.SetNeedsDisplay();
             });
         }
@@ -251,6 +284,7 @@ class Program
         }
     }
 
+    // Show the trace route dialog
     private static void ShowTraceRouteDialog()
     {
         var dialog = new Dialog("Trace Route", 60, 20);
@@ -369,21 +403,54 @@ class Program
                             bool anyPortOpen = false;
                             var openPorts = new List<int>();
 
+                            // Check each port
                             foreach (var port in CommonPorts)
                             {
                                 if (await IsPortOpenAsync(ipStr, port))
                                 {
                                     anyPortOpen = true;
                                     openPorts.Add(port);
-
-                                    // If port is 80 or 443 => clickable link
-                                    AddHostPortEntry(ipStr, fqdn, mac, port, ssdpInfo);
                                 }
                             }
 
-                            if (!anyPortOpen)
+                            // If "Hide non-open?" is checked and no ports open -> skip
+                            bool skipDisplay = (!anyPortOpen && hideNonOpenCheckBox.Checked);
+
+                            if (!skipDisplay)
                             {
-                                AddHostNoPorts(ipStr, fqdn, mac);
+                                if (anyPortOpen)
+                                {
+                                    // For each open port, color code the lines
+                                    foreach (var p in openPorts)
+                                    {
+                                        AddResultLineColored($"IP: {ipStr}", Color.BrightYellow);
+                                        AddResultLineColored($"FQDN: {fqdn}", Color.BrightGreen);
+                                        AddResultLineColored($"MAC: {mac}", Color.BrightCyan);
+                                        AddResultLineColored($"Port {p} open", Color.Red);
+
+                                        if (p == 80)
+                                        {
+                                            string url = $"http://{ipStr}/";
+                                            AddOpenUrlButton($"Open {url}", url);
+                                        }
+                                        else if (p == 443)
+                                        {
+                                            string url = $"https://{ipStr}/";
+                                            AddOpenUrlButton($"Open {url}", url);
+                                        }
+
+                                        AddResultLine("---------------------------------");
+                                    }
+                                }
+                                else
+                                {
+                                    // No ports open
+                                    AddResultLineColored($"IP: {ipStr}", Color.BrightYellow);
+                                    AddResultLineColored($"FQDN: {fqdn}", Color.BrightGreen);
+                                    AddResultLineColored($"MAC: {mac}", Color.BrightCyan);
+                                    AddResultLineColored("No common ports open", Color.Gray);
+                                    AddResultLine("---------------------------------");
+                                }
                             }
 
                             // For CSV
@@ -412,32 +479,14 @@ class Program
         });
     }
 
-    private static void AddHostPortEntry(string ip, string fqdn, string mac, int port, string ssdp)
-    {
-        AddResultLine($"IP: {ip}");
-        AddResultLine($"FQDN: {fqdn}");
-        AddResultLine($"MAC: {mac}");
-        AddResultLine($"Port {port} open");
-
-        if (port == 80)
-        {
-            string url = $"http://{ip}/";
-            AddOpenUrlButton($"Open {url}", url);
-        }
-        else if (port == 443)
-        {
-            string url = $"https://{ip}/";
-            AddOpenUrlButton($"Open {url}", url);
-        }
-        AddResultLine("---------------------------------");
-    }
-
+    // Shows info for no-port hosts
     private static void AddHostNoPorts(string ip, string fqdn, string mac)
     {
-        AddResultLine($"IP: {ip}");
-        AddResultLine($"FQDN: {fqdn}");
-        AddResultLine($"MAC: {mac}");
-        AddResultLine("No common ports open");
+        // Not used in the current code, but leaving it in case you'd like to call it:
+        AddResultLineColored($"IP: {ip}", Color.BrightYellow);
+        AddResultLineColored($"FQDN: {fqdn}", Color.BrightGreen);
+        AddResultLineColored($"MAC: {mac}", Color.BrightCyan);
+        AddResultLineColored("No common ports open", Color.Gray);
         AddResultLine("---------------------------------");
     }
 
@@ -582,16 +631,5 @@ class Program
             return "\"" + value.Replace("\"", "\"\"") + "\"";
         }
         return value;
-    }
-
-    private class ScanResult
-    {
-        public string IP { get; set; }
-        public string FQDN { get; set; }
-        public string MAC { get; set; }
-        public string OpenPorts { get; set; }
-        public string SSDP { get; set; }
-        public string MDNS { get; set; }
-        public string SNMP { get; set; }
     }
 }
