@@ -9,8 +9,8 @@
 - **Traceroute Function**: Easily trace the path packets take from your machine to a target host.
 - **Open Port Detection**: Specify which ports to check (e.g., 80, 443) to see if they’re open.
 - **Future Enhancements**:
-  - Clickable links for HTTP/HTTPS (port 80/443).
-  - MAC address lookups.
+  - Clickable links for HTTP/HTTPS (port 80/443). (Done)
+  - MAC address lookups. (Done)
   - More features as inspiration strikes!
 
 ---
