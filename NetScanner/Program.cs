@@ -14,7 +14,6 @@ using Terminal.Gui;
 
 class Program
 {
-    // We only keep CommonPorts here, as references to NetworkUtils for the rest.
     private static int[] CommonPorts = { 22, 80, 443 };
 
     // UI fields
