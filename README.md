@@ -8,6 +8,7 @@
 - **Multithreaded Scanning**: Quickly scans an entire /24 subnet (~254 addresses) in about 15 seconds.
 - **Traceroute Function**: Easily trace the path packets take from your machine to a target host.
 - **Open Port Detection**: Specify which ports to check (e.g., 80, 443) to see if they’re open. Clickable URL
+- **CSV Export**: Save scan results for later use in a csv file.
 - **MAC address lookups**: Find a Mac on your network with ease
 
 - **Future Enhancements**:
