@@ -469,38 +469,8 @@ class Program
     }
 
     private static void ExportToCsv()
-    {
-        var saveDialog = new SaveDialog("Export CSV", "Save scan results to CSV");
-        Application.Run(saveDialog);
-        if (saveDialog.Canceled) return;
-
-        var path = saveDialog.FilePath.ToString();
-        if (string.IsNullOrWhiteSpace(path)) return;
-
-        try
-        {
-            using var sw = new StreamWriter(path);
-            sw.WriteLine("IP,FQDN,MAC,OpenPorts,SSDP,MDNS,SNMP");
-            foreach (var r in scanResults)
-            {
-                sw.WriteLine($"{EscapeCsv(r.IP)},{EscapeCsv(r.FQDN)},{EscapeCsv(r.MAC)},{EscapeCsv(r.OpenPorts)},{EscapeCsv(r.SSDP)},{EscapeCsv(r.MDNS)},{EscapeCsv(r.SNMP)}");
-            }
-            AddResultLine($"Exported to {path}");
-        }
-        catch (Exception ex)
-        {
-            AddResultLine($"Error exporting: {ex.Message}");
-        }
-    }
-
-    private static string EscapeCsv(string value)
-    {
-        if (string.IsNullOrEmpty(value)) return "";
-        if (value.Contains(",") || value.Contains("\"") || value.Contains("\n"))
-        {
-            return "\"" + value.Replace("\"", "\"\"") + "\"";
-        }
-        return value;
+    {      
+        CsvExporter.ExportToCsv(scanResults, AddResultLine);
     }
 }
 
