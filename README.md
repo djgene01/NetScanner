@@ -1,6 +1,7 @@
-# NetScanner WIP
+# NetScanner 0.02 Alpha
 
 **NetScanner** is a lightweight tool built with **.NET 9** and **Terminal.GUI** to quickly scan local subnets for active devices, open ports, and even trace routes. Tired of hunting for IP addresses on your LAN? This might help!
+![NetScanner](https://github.com/user-attachments/assets/64c8b453-eca7-497c-adf5-79f168afe899)
 
 ---
 
