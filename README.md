@@ -22,6 +22,7 @@ Finding devices on a local network can be a chore. NetScanner is my personal sol
 - Which IPs are in use.
 - Which services might be running on them.
 - How network traffic travels across multiple hops (via Traceroute).
+![Screenshot from 2025-01-08 22-03-44](https://github.com/user-attachments/assets/2ffd9b90-8c7c-4200-8475-04d41cabb5b3)
 
 If it helps you, awesome!
 
